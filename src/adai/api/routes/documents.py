@@ -21,15 +21,16 @@ from adai.config import Settings, get_settings
 from adai.db import get_session
 from adai.logging import get_logger
 from adai.models import (
-    AuditEvent,
     ConsentRecord,
     Document,
     DocumentStatus,
     LawfulBasis,
     Transcription,
+    User,
 )
 from adai.queue import enqueue_document
 from adai.schemas import ConsentInput, DocumentOut, StageOut, TranscriptionOut
+from adai.security.audit import record_audit_event
 from adai.security.uploads import UploadRejectedError, validate_and_sanitise
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -53,7 +54,7 @@ def _blob_path(root: str, blob_key: str) -> Path:
 async def upload_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
-    user: Annotated[object, Depends(current_user)],
+    user: Annotated[User, Depends(current_user)],
     file: Annotated[UploadFile, File()],
     research_opt_in: Annotated[bool, Form()] = False,
     subject_is_minor: Annotated[bool, Form()] = True,
@@ -74,13 +75,12 @@ async def upload_document(
             allowed_types=settings.allowed_upload_types,
         )
     except UploadRejectedError as exc:
-        session.add(
-            AuditEvent(
-                event_type="upload_rejected",
-                outcome=exc.code,
-                actor_user_id=user.id,  # type: ignore[attr-defined]
-                detail={"code": exc.code},
-            )
+        await record_audit_event(
+            session,
+            event_type="upload_rejected",
+            outcome=exc.code,
+            actor_user_id=user.id,
+            detail={"code": exc.code},
         )
         log.info("upload_rejected", code=exc.code)
         raise HTTPException(
@@ -100,7 +100,7 @@ async def upload_document(
 
     now = dt.datetime.now(dt.UTC)
     document = Document(
-        owner_id=user.id,  # type: ignore[attr-defined]
+        owner_id=user.id,
         original_filename=Path(file.filename or "upload").name[:255],
         blob_key=clean.blob_key,
         content_type=clean.content_type,
@@ -123,13 +123,12 @@ async def upload_document(
             subject_is_minor=consent_input.subject_is_minor,
         )
     )
-    session.add(
-        AuditEvent(
-            event_type="upload_accepted",
-            outcome="success",
-            actor_user_id=user.id,  # type: ignore[attr-defined]
-            detail={"document_id": str(document.id)},
-        )
+    await record_audit_event(
+        session,
+        event_type="upload_accepted",
+        outcome="success",
+        actor_user_id=user.id,
+        detail={"document_id": str(document.id)},
     )
     # Enqueue OUTSIDE the request's own work: the handler returns as soon as the
     # document is persisted, and the pipeline runs in the worker (ADR-0011).
@@ -141,11 +140,11 @@ async def upload_document(
 @router.get("", response_model=list[DocumentOut])
 async def list_documents(
     session: Annotated[AsyncSession, Depends(get_session)],
-    user: Annotated[object, Depends(current_user)],
+    user: Annotated[User, Depends(current_user)],
 ) -> list[Document]:
     stmt = (
         select(Document)
-        .where(Document.owner_id == user.id, Document.deleted_at.is_(None))  # type: ignore[attr-defined]
+        .where(Document.owner_id == user.id, Document.deleted_at.is_(None))
         .order_by(Document.uploaded_at.desc())
         .limit(200)
     )
@@ -215,11 +214,10 @@ async def delete_document(
         log.warning("blob_path_rejected", document_id=str(document.id))
     document.deleted_at = dt.datetime.now(dt.UTC)
     document.status = DocumentStatus.DELETED
-    session.add(
-        AuditEvent(
-            event_type="document_deleted",
-            outcome="success",
-            actor_user_id=document.owner_id,
-            detail={"document_id": str(document.id)},
-        )
+    await record_audit_event(
+        session,
+        event_type="document_deleted",
+        outcome="success",
+        actor_user_id=document.owner_id,
+        detail={"document_id": str(document.id)},
     )

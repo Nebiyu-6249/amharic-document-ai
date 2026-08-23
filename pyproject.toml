@@ -35,6 +35,8 @@ dependencies = [
     "structlog>=25.1,<26",
     "rapidfuzz>=3.14,<4",
     "unicodedata2>=17,<18",
+    # AEAD for encrypting sensitive columns at rest (control C-37).
+    "cryptography>=44,<48",
 ]
 
 [project.optional-dependencies]

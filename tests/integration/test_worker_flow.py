@@ -86,10 +86,10 @@ async def test_processing_is_idempotent(client: AsyncClient) -> None:
 
     from sqlalchemy import func, select
 
-    from adai.db import get_sessionmaker
+    from adai.db import get_worker_sessionmaker
     from adai.models import Transcription
 
-    async with get_sessionmaker()() as session:
+    async with get_worker_sessionmaker()() as session:
         count = await session.scalar(
             select(func.count())
             .select_from(Transcription)
@@ -108,10 +108,10 @@ async def test_deletion_purges_the_blob(client: AsyncClient) -> None:
 
     from sqlalchemy import select
 
-    from adai.db import get_sessionmaker
+    from adai.db import get_worker_sessionmaker
     from adai.models import Document
 
-    async with get_sessionmaker()() as session:
+    async with get_worker_sessionmaker()() as session:
         blob_key = await session.scalar(
             select(Document.blob_key).where(Document.id == uuid.UUID(document_id))
         )

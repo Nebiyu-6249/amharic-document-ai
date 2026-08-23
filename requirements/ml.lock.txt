@@ -36,7 +36,9 @@ cattrs==26.1.0
 certifi==2026.7.22
     # via requests
 cffi==2.1.1
-    # via argon2-cffi-bindings
+    # via
+    #   argon2-cffi-bindings
+    #   cryptography
 charset-normalizer==3.5.1
     # via requests
 click==8.2.1
@@ -47,6 +49,8 @@ click==8.2.1
     #   uvicorn
 coremltools==9.0
     # via kraken
+cryptography==47.0.0
+    # via adai (pyproject.toml)
 cuda-bindings==13.3.1
     # via torch
 cuda-pathfinder==1.6.1

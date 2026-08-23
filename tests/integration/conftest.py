@@ -53,9 +53,12 @@ async def _reset_queue_pool() -> AsyncIterator[None]:
 async def _clean_tables() -> AsyncIterator[None]:
     from sqlalchemy import text
 
-    from adai.db import get_sessionmaker
+    from adai.db import get_worker_sessionmaker
 
     yield
-    async with get_sessionmaker()() as session:
-        await session.execute(text("TRUNCATE users, audit_events CASCADE"))
+    # Cleanup runs as the worker role, which has BYPASSRLS: the app role is scoped by
+    # row level security and could not see other tests' rows to remove them.
+    async with get_worker_sessionmaker()() as session:
+        await session.execute(text("DELETE FROM audit_events"))
+        await session.execute(text("DELETE FROM users"))
         await session.commit()

@@ -17,11 +17,15 @@ arq==0.28.0
 async-timeout==5.0.1
     # via redis
 cffi==2.1.1
-    # via argon2-cffi-bindings
+    # via
+    #   argon2-cffi-bindings
+    #   cryptography
 click==8.4.2
     # via
     #   arq
     #   uvicorn
+cryptography==47.0.0
+    # via adai (pyproject.toml)
 dnspython==2.8.0
     # via email-validator
 email-validator==2.3.0

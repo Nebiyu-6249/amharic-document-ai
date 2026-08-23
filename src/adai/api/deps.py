@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adai.config import Settings, get_settings
-from adai.db import get_session
+from adai.db import get_session, set_rls_context
 from adai.models import Document, User
 
 SESSION_COOKIE = "adai_session"
@@ -47,12 +47,22 @@ async def current_user(
     except BadSignature as exc:
         raise unauthorised from exc
 
-    user = await session.get(User, uuid.UUID(payload["uid"]))
+    # Set the RLS context BEFORE the first query. The cookie is signed, so the uid in
+    # it is authentic; without this the users table (FORCE ROW LEVEL SECURITY) would
+    # hide the very row we need to authenticate against.
+    try:
+        claimed_id = uuid.UUID(payload["uid"])
+    except (KeyError, ValueError) as exc:
+        raise unauthorised from exc
+    await set_rls_context(session, claimed_id)
+
+    user = await session.get(User, claimed_id)
     if user is None or not user.is_active:
         raise unauthorised
     # A password change bumps session_epoch, which invalidates every issued cookie.
     if payload.get("epoch") != user.session_epoch:
         raise unauthorised
+
     return user
 
 

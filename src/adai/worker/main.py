@@ -15,7 +15,7 @@ from arq.connections import RedisSettings
 from sqlalchemy import select
 
 from adai.config import get_settings
-from adai.db import get_sessionmaker
+from adai.db import get_worker_sessionmaker
 from adai.logging import configure_logging, get_logger
 from adai.models import Document, DocumentStatus, Transcription
 from adai.pipeline.runner import run_pipeline
@@ -29,7 +29,7 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> dict[str, A
     settings = get_settings()
     doc_uuid = uuid.UUID(document_id)
 
-    async with get_sessionmaker()() as session:
+    async with get_worker_sessionmaker()() as session:
         document = await session.get(Document, doc_uuid)
         if document is None or document.deleted_at is not None:
             log.info("job_skipped", document_id=document_id, reason="missing_or_deleted")
@@ -56,7 +56,7 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> dict[str, A
             image_bytes,
         )
     except Exception:
-        async with get_sessionmaker()() as session:
+        async with get_worker_sessionmaker()() as session:
             failed = await session.get(Document, doc_uuid)
             if failed is not None:
                 failed.status = DocumentStatus.FAILED
@@ -64,7 +64,7 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> dict[str, A
         log.error("job_failed", document_id=document_id)
         raise
 
-    async with get_sessionmaker()() as session:
+    async with get_worker_sessionmaker()() as session:
         session.add(
             Transcription(
                 document_id=doc_uuid,
@@ -99,7 +99,7 @@ async def purge_expired_originals(ctx: dict[str, Any]) -> dict[str, int]:
     settings = get_settings()
     now = dt.datetime.now(dt.UTC)
     purged = 0
-    async with get_sessionmaker()() as session:
+    async with get_worker_sessionmaker()() as session:
         stmt = select(Document).where(
             Document.originals_expire_at < now, Document.deleted_at.is_(None)
         )

@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     # --- secrets: no defaults, deliberately ---
     secret_key: SecretStr = Field(..., description="Session/CSRF signing key. 32+ bytes.")
     database_url: str = Field(..., description="postgresql+psycopg://user:pass@host/db")
+    #: The worker connects as a role with BYPASSRLS (control C-18): it legitimately
+    #: processes every user's documents and has no request-handling path for an IDOR to
+    #: arrive through. Defaults to database_url for single-role development.
+    worker_database_url: str | None = None
+    #: Pre-authentication lookups only. Login must find a user by email *before* any
+    #: identity exists, so it cannot satisfy an RLS predicate. In production this should
+    #: be a role with SELECT on users and nothing else (see scripts/db_roles.sql);
+    #: it defaults to database_url for single-role development.
+    auth_database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
 
     # --- transport & CORS (C-01..C-04) ---
@@ -84,6 +93,14 @@ class Settings(BaseSettings):
         if any(origin.strip() == "*" for origin in v):
             raise ValueError("wildcard CORS origin is forbidden (control C-04)")
         return v
+
+    @property
+    def effective_worker_database_url(self) -> str:
+        return self.worker_database_url or self.database_url
+
+    @property
+    def effective_auth_database_url(self) -> str:
+        return self.auth_database_url or self.database_url
 
 
 @lru_cache(maxsize=1)
