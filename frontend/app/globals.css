@@ -1,0 +1,78 @@
+:root {
+  --bg: #ffffff;
+  --fg: #16150f;
+  --muted: #5d5a4e;
+  --line: #e2ded1;
+  --accent: #7a4a1e;
+  --warn-bg: #fdf3e3;
+  --warn-fg: #6b4a12;
+  --warn-line: #e5c98f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14130f;
+    --fg: #f2efe6;
+    --muted: #a9a494;
+    --line: #33302a;
+    --accent: #d9a066;
+    --warn-bg: #2c2413;
+    --warn-fg: #e8cd94;
+    --warn-line: #6b571f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main { max-width: 52rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+h1 { font-size: 1.7rem; margin: 0 0 .35rem; letter-spacing: -.01em; }
+.sub { color: var(--muted); margin: 0 0 2rem; }
+
+.banner {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border: 1px solid var(--warn-line);
+  border-radius: 8px;
+  padding: .85rem 1rem;
+  margin-bottom: 2rem;
+  font-size: .9rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+label { display: block; font-weight: 600; margin-bottom: .4rem; font-size: .92rem; }
+.hint { color: var(--muted); font-size: .84rem; font-weight: 400; margin-top: .25rem; }
+input[type="file"] { width: 100%; }
+
+.check { display: flex; gap: .6rem; align-items: flex-start; margin-top: 1rem; }
+.check input { margin-top: .3rem; }
+.check span { font-weight: 400; font-size: .92rem; }
+
+button {
+  margin-top: 1.25rem;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 7px;
+  padding: .6rem 1.1rem;
+  font-size: .95rem;
+  cursor: pointer;
+}
+button:disabled { opacity: .55; cursor: not-allowed; }
+
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .5rem .4rem; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }

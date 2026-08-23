@@ -1,0 +1,57 @@
+# Install with: pre-commit install
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        # Datasets and checkpoints must never enter git history.
+        args: ["--maxkb=512"]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        files: ^src/
+        additional_dependencies:
+          - pydantic>=2.13
+          - types-requests
+
+  # Control C-36: no secret reaches a commit.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: ^(requirements/.*\.lock\.txt|frontend/package-lock\.json)$
+
+  - repo: local
+    hooks:
+      # Control C-45: the API image must never gain an ML dependency.
+      - id: api-isolation
+        name: api image contains no ML stack (C-45)
+        entry: python scripts/check_api_isolation.py
+        language: system
+        files: ^requirements/api\.lock\.txt$
+        pass_filenames: false
+      # The threat model must stay internally consistent.
+      - id: threat-coverage
+        name: threat model coverage invariant
+        entry: python docs/research/verify_threat_coverage.py
+        language: system
+        files: ^docs/(THREAT_MODEL\.md|research/verify_threat_coverage\.py)$
+        pass_filenames: false

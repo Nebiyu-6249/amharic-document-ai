@@ -1,0 +1,125 @@
+# Local development stack: api, worker, postgres, redis, frontend.
+#
+#   cp .env.example .env && make dev
+#
+# This is a DEV compose file. It does not terminate TLS; ADAI_FORCE_HTTPS is left to
+# .env and should be true behind a real reverse proxy in any deployed environment.
+
+name: adai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-adai_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-adai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-adai_app} -d ${POSTGRES_DB:-adai}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Not published to the host: nothing outside the compose network needs it.
+    expose:
+      - "5432"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    expose:
+      - "6379"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ADAI_SECRET_KEY: ${ADAI_SECRET_KEY:?ADAI_SECRET_KEY must be set in .env}
+      ADAI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-adai_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-adai}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      ADAI_ENVIRONMENT: ${ADAI_ENVIRONMENT:-dev}
+      ADAI_SECRET_KEY: ${ADAI_SECRET_KEY:?ADAI_SECRET_KEY must be set in .env}
+      ADAI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-adai_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-adai}
+      ADAI_REDIS_URL: redis://redis:6379/0
+      ADAI_FORCE_HTTPS: ${ADAI_FORCE_HTTPS:-false}
+      ADAI_CORS_ALLOW_ORIGINS: ${ADAI_CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      ADAI_BLOB_ROOT: /var/lib/adai/blobs
+      ADAI_PIPELINE_MODE: ${ADAI_PIPELINE_MODE:-stub}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - blobs:/var/lib/adai/blobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Hardening: no new privileges, read-only root, writable tmp only.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        # Switch to ml.lock.txt for the real pipeline (large image; see docs/STATUS.md).
+        LOCKFILE: ${WORKER_LOCKFILE:-api.lock.txt}
+    environment:
+      ADAI_ENVIRONMENT: ${ADAI_ENVIRONMENT:-dev}
+      ADAI_SECRET_KEY: ${ADAI_SECRET_KEY:?ADAI_SECRET_KEY must be set in .env}
+      ADAI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-adai_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-adai}
+      ADAI_REDIS_URL: redis://redis:6379/0
+      ADAI_BLOB_ROOT: /var/lib/adai/blobs
+      ADAI_PIPELINE_MODE: ${ADAI_PIPELINE_MODE:-stub}
+    volumes:
+      - blobs:/var/lib/adai/blobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pgdata:
+  blobs:

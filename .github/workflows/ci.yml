@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ADAI_SECRET_KEY: ci-only-secret-key-at-least-32-characters
+  ADAI_DATABASE_URL: postgresql+psycopg://adai_app:ci-password@127.0.0.1:5432/adai
+  ADAI_ENVIRONMENT: test
+  ADAI_FORCE_HTTPS: "false"
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: adai_app
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: adai
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U adai_app -d adai"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip install --python .venv/bin/python -r requirements/dev.lock.txt
+          uv pip install --python .venv/bin/python --no-deps -e .
+
+      - name: Lint (ruff)
+        run: |
+          .venv/bin/python -m ruff check src tests scripts
+          .venv/bin/python -m ruff format --check src tests scripts
+
+      - name: Type-check (mypy strict)
+        run: .venv/bin/python -m mypy
+
+      - name: Locks are reproducible from pyproject.toml
+        run: |
+          uv pip compile --python-version 3.11 --no-header pyproject.toml -o /tmp/api.lock.txt
+          diff -u requirements/api.lock.txt /tmp/api.lock.txt
+
+      - name: C-45 - api image contains no ML stack
+        run: .venv/bin/python scripts/check_api_isolation.py requirements/api.lock.txt
+
+      - name: Documentation invariants
+        run: |
+          .venv/bin/python docs/research/verify_threat_coverage.py
+          .venv/bin/python docs/research/verify_ethiopic_inventory.py
+
+      - name: Migrate
+        run: PYTHONPATH=src .venv/bin/python -m alembic upgrade head
+
+      - name: Tests
+        run: .venv/bin/python -m pytest tests -q --cov=adai --cov-report=term-missing
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the secret scan can see every commit (control C-36).
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install audit tooling
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip install --python .venv/bin/python -r requirements/dev.lock.txt
+
+      - name: C-39 - dependency audit (fails the build)
+        run: |
+          .venv/bin/python -m pip_audit -r requirements/api.lock.txt --progress-spinner off
+          .venv/bin/python -m pip_audit -r requirements/dev.lock.txt --progress-spinner off
+
+      - name: C-36 - secret scan across full history
+        run: |
+          .venv/bin/python -m detect_secrets scan --all-files \
+            --exclude-files 'requirements/.*\.lock\.txt' \
+            --exclude-files 'frontend/package-lock\.json' > /tmp/scan.json
+          .venv/bin/python - <<'PY'
+          import json, sys
+          results = json.load(open("/tmp/scan.json"))["results"]
+          if results:
+              print("Potential secrets detected:", json.dumps(results, indent=2))
+              sys.exit(1)
+          print("No secrets detected.")
+          PY
+
+      - name: C-39 - generate SBOM
+        run: .venv/bin/python -m cyclonedx_py requirements requirements/api.lock.txt -o sbom.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose file is valid
+        run: ADAI_SECRET_KEY=x POSTGRES_PASSWORD=y docker compose config --quiet
