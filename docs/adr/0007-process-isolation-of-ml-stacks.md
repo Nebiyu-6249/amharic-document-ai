@@ -54,7 +54,13 @@ Rules that follow:
 - Directly satisfies the async-inference requirement: the API cannot block on a GPU job because the GPU job is not in the API process.
 
 ## Threat-model mapping
-Mitigates **T-03 (malicious image file)** and **T-05 (supply chain)**. To be cross-referenced from `docs/THREAT_MODEL.md` in Phase 1.
+Recorded as **C-45** in `docs/THREAT_MODEL.md` §8.6. Mitigates **T-03** (malicious image file),
+**T-05** (poisoned checkpoint / typosquat), **T-21** (worker compromise and lateral movement)
+and **T-27** (vulnerable dependency reaching production).
+
+C-45 did not exist in Phase 5's original control list — the isolation requirement lived only in
+this ADR, with no control ID and therefore no test. The bidirectional coverage check in
+`docs/research/verify_threat_coverage.py` surfaced the gap, and the control was added.
 
 ## Revisit when
 surya relaxes its pillow cap (then it may share the worker environment — still never the API), or we drop the surya baseline entirely.
