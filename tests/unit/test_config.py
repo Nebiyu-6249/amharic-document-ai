@@ -35,3 +35,17 @@ def test_retention_default_is_ninety_days() -> None:
 def test_explicit_origin_allowlist_is_accepted() -> None:
     settings = Settings(**BASE, cors_allow_origins=("https://app.example.com",))  # type: ignore[arg-type]
     assert settings.cors_allow_origins == ("https://app.example.com",)
+
+
+def test_auth_database_url_is_required_outside_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without it, RLS makes every login fail with a message that looks like a password
+    problem. Startup must refuse rather than serve a broken login."""
+    # Settings reads the ambient environment, which the test runner populates.
+    monkeypatch.delenv("ADAI_AUTH_DATABASE_URL", raising=False)
+    with pytest.raises(ValidationError, match="ADAI_AUTH_DATABASE_URL"):
+        Settings(**BASE, environment="prod")  # type: ignore[arg-type]
+
+
+def test_auth_database_url_may_be_omitted_in_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADAI_AUTH_DATABASE_URL", raising=False)
+    assert Settings(**BASE, environment="dev").auth_database_url is None  # type: ignore[arg-type]

@@ -26,7 +26,10 @@ async def _session_for(email: str) -> AsyncClient:
 
     client = AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://testserver")
     await client.post("/auth/register", json={"email": email, "password": "correct-horse-battery"})
-    await client.post("/auth/login", json={"email": email, "password": "correct-horse-battery"})
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": "correct-horse-battery"}
+    )
+    client.headers["x-csrf-token"] = login.json()["csrf_token"]
     return client
 
 

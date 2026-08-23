@@ -1,7 +1,6 @@
 # Project Status
 
-**Date:** 2026-08-23 · **Phase reached:** end of Phase 3 (scaffold). Phase 5 (security
-implementation) and Phase 6 (evaluation) are not started.
+**Date:** 2026-08-23 · **Phase reached:** end of Phase 5 (security implementation). Phase 6 (evaluation) is not started.
 
 Everything below was verified by running it in the session that produced this repo,
 except where explicitly marked **UNVERIFIED**.
@@ -14,7 +13,7 @@ except where explicitly marked **UNVERIFIED**.
 
 | Area | Evidence |
 |---|---|
-| **Dependency locks** | Three locks generated from `pyproject.toml` and resolved: api (46 pins), dev, ml (405 pins). `pillow==12.3.0` throughout. |
+| **Dependency locks** | Three locks generated from `pyproject.toml` and resolved: api **47**, dev **111**, ml **132** pins. `pillow==12.3.0` throughout. (An earlier revision of this document quoted 46/405; those were line counts including `# via` annotations, not pins.) |
 | **Install** | `uv venv` + dev lock installed; package installed editable; all imports resolve. |
 | **Database** | PostgreSQL 16.13 live; Alembic migration applied and **round-tripped up/down/up/down/up** cleanly. |
 | **Migration rollback** | Initially broken — `downgrade` left ENUM types behind, so re-upgrade failed. Fixed with explicit `Enum(...).drop()`. |
@@ -28,7 +27,7 @@ except where explicitly marked **UNVERIFIED**.
 | **Docker image** | API image **built and run**; served `/healthz` and `/readyz` from inside the container against host Postgres. |
 | **C-45 in the image** | `torch`, `paddle`, `surya`, `kraken`, `onnxruntime`, `cv2` all absent from the built image; `pillow 12.3.0` present. |
 | **Frontend** | `npm install`, `tsc --noEmit` and `next build` all clean; standalone output. |
-| **Quality gates** | ruff clean, ruff-format clean, **mypy strict clean on 36 files**, 92 tests passing, `pip-audit` clean, secret scan clean, `docker compose config` valid. |
+| **Quality gates** | ruff clean, ruff-format clean, **mypy strict clean on 49 files**, **208 tests passing**, `pip-audit` clean, secret scan clean, `docker compose config` valid. |
 
 ### Implemented pipeline stages
 
@@ -38,6 +37,27 @@ except where explicitly marked **UNVERIFIED**.
 | 5 — Reading order + assembly | **Real.** Region ordering, Markdown/JSON emission, OCR text escaped before entering Markdown. |
 | Ethiopic module | **Real.** 523 codepoints, four homophone families folding 35 codepoints across all 7 vowel orders, `[\s፡]+` tokenisation. |
 | Evaluation metrics | **Real.** CER, normalisation-aware CER, WER, NED, Kendall's tau, layout mAP, field-level F1. |
+
+
+### Security controls (Phase 5)
+
+45 controls: **38 Implemented, 4 Partial, 2 Deferred, 1 N/A** — full register with threat
+references and per-control tests in [SECURITY.md](SECURITY.md).
+
+| Area | Verified |
+|---|---|
+| **Row Level Security (C-17)** | Enabled and FORCEd on all six user-data tables. Proven at the SQL layer: an unscoped session sees 0 rows, user A cannot read user B's document even by direct id, and the app role cannot read the audit log at all. |
+| **Least-privilege roles (C-18)** | Four roles with different jobs; test asserts `adai_app` is NOBYPASSRLS and `adai_worker` is BYPASSRLS. |
+| **CSRF (C-08)** | Synchroniser tokens; missing, forged and cross-session tokens all refused. |
+| **Session invalidation (C-09)** | `session_epoch` bump kills every issued cookie on password change. |
+| **Reset tokens (C-10)** | CSPRNG, SHA-256 at rest, 30-minute expiry, single use. |
+| **Progressive delay (C-13)** | Exponential backoff capped at 8s on both account and IP axes; **no hard lockout** by design. |
+| **Prompt injection (C-31)** | Role separation, fenced untrusted data, schema-constrained output; 4 injection payloads and 7 malformed responses all refused. |
+| **Spend breaker (C-32)** | **Fails closed** when Redis is unreachable — tested against a dead Redis. |
+| **Model supply chain (C-34)** | Every pickle format refused; checksum mismatch refuses to load; floating revisions rejected at construction. |
+| **Encryption at rest (C-37)** | AES-256-GCM; tampering and wrong keys rejected; **no plaintext copy stored beside the ciphertext**. |
+| **Mutation testing** | 16 controls removed or inverted in turn; every one caught by its test. Table in SECURITY.md §1. |
+| **Dependency audit (C-39)** | Two tiers. `api` and `dev` are strict and clean. The `ml` extra carries two advisories that `kraken 7.1` pins in place (`click<8.3`, `lightning==2.6.1`, the latter with **no published fix**) — proven unfixable by resolver error, listed by id so new findings still fail the build. |
 
 ---
 
@@ -130,31 +150,51 @@ Recorded because each was found by running something, not by reading it.
 9. **`RUF001` flagged every Ethiopic character** as "ambiguous Unicode, did you mean Latin
    U?". Exempted with justification — the rule fights this project's domain.
 
-Each security control was also **mutation-tested**: redaction, EXIF stripping, SVG
-rejection, dimension caps, the IDOR ownership predicate and the Argon2 timing path were
-each removed in turn, the corresponding test was confirmed to fail, and the control was
-restored.
+Phase 5 added nine more, all found by running things:
+
+10. **RLS blocked registration.** The `WITH CHECK` predicate cannot be satisfied before
+    an identity exists. Split into per-command policies.
+11. **`INSERT ... RETURNING` is evaluated against the SELECT policy.** Broke both
+    registration and audit writes; fixed by scoping the context first and using
+    `.inline()` for audit inserts.
+12. **Login could not read `users`** — the row is hidden by RLS before authentication.
+    Added a narrowly scoped `adai_auth` role.
+13. **`current_setting` returns `''`, and `''::uuid` raises** instead of matching
+    nothing. Policies now use `NULLIF` so an unscoped session is denied, not errored.
+14. **The Redis client was bound to one event loop**, same class of bug as the arq pool.
+15. **CSRF tokens were keyed to the wrong session string** — `issue_session` stamps a
+    timestamp and was called twice, so the stored token never matched the cookie.
+16. **C-37 was decoration.** The first version stored the redacted transcription in a
+    plaintext column *and* its ciphertext beside it. Now only the ciphertext carries
+    content, asserted by a test.
+17. **`cryptography` had to be bumped 47 → 50** through three chained advisories; the
+    original `<48` upper bound would have blocked the fix. Caught by C-39.
+18. **A missing `ADAI_AUTH_DATABASE_URL` makes every login fail** with "invalid
+    credentials", which looks like a password problem. Now a startup error outside dev.
+
+Each security control was also **mutation-tested**: 16 controls — redaction, EXIF stripping, SVG rejection,
+dimension caps, the IDOR predicate, the Argon2 timing path, CSRF validation, session
+epoch, the fail-closed breaker, checkpoint format gates, authenticated decryption,
+redaction completeness, prompt-injection role separation, webhook replay protection,
+RLS FORCE, and the RLS policy itself — were each removed or inverted in turn, the
+corresponding test confirmed failing, and the control restored. Table in
+[SECURITY.md](SECURITY.md) §1.
 
 ---
 
 ## 6. The next three tasks
 
-1. **Unblock the Fidel dataset (blocks everything ML).** Either allowlist
+1. **Unblock the Fidel dataset (still blocks everything ML).** Either allowlist
    `huggingface.co` + `cdn-lfs.huggingface.co`, or drop the card and a sample shard into
    `data/raw/fidel/`. Then write the loader against the **observed** schema and delete
-   `FidelNotAvailableError`. Until this happens, stage 4 cannot be trained and no
-   published number can be reproduced.
-2. **Phase 5 — implement the remaining controls with failing-without-them tests.** The
-   large gaps are CSRF synchroniser tokens (C-08), progressive delay + challenge (C-13),
-   bot protection (C-14), password reset (C-10/C-11), Postgres RLS (C-17), least-privilege
-   DB roles (C-18), AI quotas and the fail-closed spend breaker (C-32/C-33), and PII
-   redaction before anything crosses TB-06 (C-41).
-3. **Phase 6 — stand up the VLM baseline runner (ADR-0010).** surya reports Amharic at
-   74.6%. Until we know how an off-the-shelf VLM scores on our splits, we do not know
-   whether the pipeline is worth building. This is a decision gate, and it should run
-   before more pipeline effort.
-
----
+   `FidelNotAvailableError`. Nothing in stage 4 can be trained until this happens.
+2. **Phase 6 — the VLM baseline runner (ADR-0010).** surya reports Amharic at 74.6%.
+   Until we know how an off-the-shelf VLM scores on our splits we do not know whether the
+   pipeline is worth building. This is a decision gate and should run before more
+   pipeline effort.
+3. **Close the four Partial controls** (SECURITY.md §4): an Amharic NER model for name
+   redaction (C-41), a real bot challenge provider (C-14), wiring the inference limiter
+   when an endpoint exists (C-33), and your decision on raw-text provenance (C-26).
 
 ## 7. Known risks
 
@@ -169,6 +209,11 @@ restored.
 | **surya baseline container carries 24 CVEs** | Low, contained | Accepted risk R-01: offline only, never on the request path, never sees user data. |
 | **arq pins redis-py to 5.x** | Low | No known CVEs today. Revisit trigger recorded in ADR-0011. |
 | **Ethiopic Extended-B is astral** | Low | Handled in Python; the frontend and DB collation paths are **not yet tested** for it. |
+| **No transcription is de-identified (C-41)** | **High** | Person names are not detected and cannot be by regex. `is_complete` is hard-coded False. This constrains the research corpus and must be stated to the ethics board. |
+| **C-14 is a throttle, not bot protection** | Medium | The challenge threshold fires but no provider is integrated, so there is nothing to solve. |
+| **ml extra carries two unfixable advisories** | Medium | `kraken 7.1` pins `click<8.3` and `lightning==2.6.1`; lightning's has no published fix. Contained because the ml stack never runs in the API container (C-45). Revisit on any kraken upgrade. |
+| **Key custody for C-37** | Medium | `ADAI_SECRET_KEY` is not in a secret manager. Ciphertexts are versioned for rotation, but rotation is not implemented. |
+| **RLS does not stop a superuser** | Medium | It contains application mistakes (T-02), not a compromised DBA (T-24). C-37 and C-38 exist alongside it for that reason. |
 
 ---
 

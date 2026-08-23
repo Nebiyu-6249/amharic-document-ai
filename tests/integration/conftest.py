@@ -41,12 +41,14 @@ async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _reset_queue_pool() -> AsyncIterator[None]:
-    """Each test runs on its own event loop; drop the cached pool with it."""
+async def _reset_async_clients() -> AsyncIterator[None]:
+    """Each test runs on its own event loop; drop loop-bound clients with it."""
     yield
     from adai.queue import close_pool
+    from adai.redis_client import close_redis
 
     await close_pool()
+    await close_redis()
 
 
 @pytest_asyncio.fixture(autouse=True)

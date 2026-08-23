@@ -24,7 +24,7 @@ click==8.4.2
     # via
     #   arq
     #   uvicorn
-cryptography==47.0.0
+cryptography==50.0.0
     # via adai (pyproject.toml)
 dnspython==2.8.0
     # via email-validator

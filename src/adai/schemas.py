@@ -34,6 +34,20 @@ class LoginRequest(StrictModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class PasswordChangeRequest(StrictModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
+class PasswordResetRequest(StrictModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(StrictModel):
+    token: str = Field(min_length=16, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class ConsentInput(StrictModel):
     """Consent captured at upload time (C-40, Q-2).
 

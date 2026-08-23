@@ -22,6 +22,7 @@ from adai.config import get_settings
 from adai.db import dispose_engine
 from adai.logging import configure_logging, get_logger
 from adai.queue import close_pool
+from adai.redis_client import close_redis
 from adai.security.headers import SecurityHeadersMiddleware
 
 log = get_logger("adai.api")
@@ -33,6 +34,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging(json_output=settings.environment != "dev")
     log.info("api_start", environment=settings.environment, version=__version__)
     yield
+    await close_redis()
     await close_pool()
     await dispose_engine()
 

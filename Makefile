@@ -56,7 +56,7 @@ security: ## Dependency audit, secret scan, API isolation, doc invariants
 	@echo "--- C-45: API image contains no ML stack ---"
 	$(PY) scripts/check_api_isolation.py requirements/api.lock.txt
 	@echo "--- C-39: dependency audit (build-failing) ---"
-	$(PY) -m pip_audit -r requirements/api.lock.txt --progress-spinner off
+	PY=$(PY) ./scripts/audit_dependencies.sh
 	@echo "--- C-36: secret scan across the working tree ---"
 	$(PY) -m detect_secrets scan --baseline .secrets.baseline
 	@echo "--- threat-model coverage invariant ---"

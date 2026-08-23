@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, Request, status
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from adai.config import Settings, get_settings
 from adai.db import get_session, set_rls_context
 from adai.models import Document, User
+from adai.redis_client import get_redis
+from adai.security.csrf import CSRF_HEADER, UNSAFE_METHODS, validate_token
 
 SESSION_COOKIE = "adai_session"
 SESSION_MAX_AGE = 60 * 60 * 12
@@ -86,3 +88,37 @@ async def owned_document(
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
     return document
+
+
+def client_ip(request: Request) -> str:
+    """Best-effort client IP for rate limiting.
+
+    Trusts X-Forwarded-For only because uvicorn runs behind a proxy that sets it
+    (--proxy-headers). Falls back to the socket address. Rate-limit keys are not a
+    security boundary on their own, which is why limits are enforced per-account as
+    well as per-IP (control C-11).
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def require_csrf(
+    request: Request,
+    adai_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+) -> None:
+    """Enforce the CSRF synchroniser token on state-changing requests (control C-08).
+
+    Cookie-authenticated state-changing requests only. A request with no session cookie
+    is not acting on anyone's behalf, so there is nothing to forge.
+    """
+    if request.method.upper() not in UNSAFE_METHODS:
+        return
+    if not adai_session:
+        return
+    presented = request.headers.get(CSRF_HEADER)
+    if not await validate_token(get_redis(), adai_session, presented):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="csrf token missing or invalid"
+        )

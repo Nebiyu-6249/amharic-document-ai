@@ -25,6 +25,8 @@ async def _register_and_login(client: AsyncClient, email: str) -> None:
     r = await client.post("/auth/login", json={"email": email, "password": "correct-horse-battery"})
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+    # Every state-changing request now needs the CSRF synchroniser token (C-08).
+    client.headers["x-csrf-token"] = r.json()["csrf_token"]
 
 
 async def test_healthz_needs_no_database(client: AsyncClient) -> None:

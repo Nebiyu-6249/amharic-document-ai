@@ -7,6 +7,7 @@ must not produce two transcriptions or double-charge a quota.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
 from pathlib import Path
 from typing import Any, ClassVar
@@ -20,6 +21,8 @@ from adai.logging import configure_logging, get_logger
 from adai.models import Document, DocumentStatus, Transcription
 from adai.pipeline.runner import run_pipeline
 from adai.pipeline.types import PageInput
+from adai.security.crypto import derive_key, encrypt_field
+from adai.security.redaction import redact
 
 log = get_logger("adai.worker")
 
@@ -64,19 +67,38 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> dict[str, A
         log.error("job_failed", document_id=document_id)
         raise
 
+    # C-41: redact deterministic identifiers before anything is persisted, and
+    # certainly before any text could cross TB-06 to a third-party LLM. Note that
+    # RedactionResult.is_complete is always False -- person names are not detected --
+    # so this reduces exposure, it does not de-identify. See docs/SECURITY.md.
+    redaction = redact(result.markdown)
+    redacted_regions = [
+        {**region, "text": redact(str(region.get("text", ""))).text} for region in result.regions
+    ]
+
+    # C-37: keep the transcription encrypted at rest. The plaintext column holds the
+    # redacted form; the ciphertext holds the redacted text under AES-256-GCM.
+    key = derive_key(settings.secret_key.get_secret_value())
+
+    # Everything derived from the page goes in the ciphertext. Storing the same content
+    # in a plaintext column beside it would make the encryption decorative, so the
+    # plaintext columns hold only non-sensitive provenance: which stages ran.
+    payload = json.dumps(
+        {"markdown": redaction.text, "regions": redacted_regions}, ensure_ascii=False
+    )
+
     async with get_worker_sessionmaker()() as session:
         session.add(
             Transcription(
                 document_id=doc_uuid,
                 schema_version=result.schema_version,
-                structured={
-                    "regions": result.regions,
-                    "stages": [s.model_dump() for s in result.stages],
-                },
-                markdown=result.markdown,
-                # C-41 has not run yet; redaction is a Phase 5 deliverable and this
-                # flag must be true before anything crosses TB-06 to OpenAI.
-                pii_redacted=False,
+                structured={"stages": [s.model_dump() for s in result.stages]},
+                markdown="",
+                encrypted_text=encrypt_field(payload, key),
+                # True means the deterministic pass ran, NOT that the text is
+                # de-identified. redaction.is_complete is what would mean that, and it
+                # is False until an Amharic NER model exists.
+                pii_redacted=redaction.redacted_anything or not redaction.text,
                 pipeline_mode=settings.pipeline_mode,
                 contains_stub_stages=result.contains_stub_stages,
             )

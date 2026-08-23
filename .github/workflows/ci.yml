@@ -95,9 +95,7 @@ jobs:
           uv pip install --python .venv/bin/python -r requirements/dev.lock.txt
 
       - name: C-39 - dependency audit (fails the build)
-        run: |
-          .venv/bin/python -m pip_audit -r requirements/api.lock.txt --progress-spinner off
-          .venv/bin/python -m pip_audit -r requirements/dev.lock.txt --progress-spinner off
+        run: PY=.venv/bin/python ./scripts/audit_dependencies.sh
 
       - name: C-36 - secret scan across full history
         run: |

@@ -9,6 +9,7 @@ written to disk.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adai.api.deps import current_user, owned_document
+from adai.api.deps import current_user, owned_document, require_csrf
 from adai.config import Settings, get_settings
 from adai.db import get_session
 from adai.logging import get_logger
@@ -31,9 +32,12 @@ from adai.models import (
 from adai.queue import enqueue_document
 from adai.schemas import ConsentInput, DocumentOut, StageOut, TranscriptionOut
 from adai.security.audit import record_audit_event
+from adai.security.crypto import DecryptionError, decrypt_field, derive_key
 from adai.security.uploads import UploadRejectedError, validate_and_sanitise
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+# require_csrf runs on every route here; it is a no-op for safe methods and for
+# requests with no session cookie (control C-08).
+router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(require_csrf)])
 log = get_logger("adai.documents")
 
 
@@ -160,6 +164,7 @@ async def get_document(document: Annotated[Document, Depends(owned_document)]) -
 async def get_transcription(
     document: Annotated[Document, Depends(owned_document)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> TranscriptionOut:
     stmt = (
         select(Transcription)
@@ -170,8 +175,29 @@ async def get_transcription(
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
-    # structured is JSONB: narrow it explicitly rather than trusting its shape.
+    # structured JSONB holds provenance only; the transcription itself lives encrypted
+    # at rest (control C-37) and is decrypted here for the owner of the document.
     structured: dict[str, Any] = row.structured if isinstance(row.structured, dict) else {}
+    markdown = row.markdown
+    regions: list[dict[str, object]] = []
+    if row.encrypted_text:
+        try:
+            payload = json.loads(
+                decrypt_field(
+                    row.encrypted_text, derive_key(settings.secret_key.get_secret_value())
+                )
+            )
+        except (DecryptionError, json.JSONDecodeError) as exc:
+            log.error("transcription_decrypt_failed", document_id=str(document.id))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="transcription unavailable",
+            ) from exc
+        markdown = str(payload.get("markdown", ""))
+        raw_regions = payload.get("regions", [])
+        regions = (
+            [r for r in raw_regions if isinstance(r, dict)] if isinstance(raw_regions, list) else []
+        )
     raw_stages = structured.get("stages", [])
     # Project onto StageOut's declared fields. The stored stage record carries
     # internals such as duration_ms that the response schema deliberately omits
@@ -186,14 +212,10 @@ async def get_transcription(
         if isinstance(raw_stages, list)
         else []
     )
-    raw_regions = structured.get("regions", [])
-    regions = (
-        [r for r in raw_regions if isinstance(r, dict)] if isinstance(raw_regions, list) else []
-    )
     return TranscriptionOut(
         document_id=document.id,
         schema_version=row.schema_version,
-        markdown=row.markdown,
+        markdown=markdown,
         regions=regions,
         contains_stub_stages=row.contains_stub_stages,
         stages=stages,

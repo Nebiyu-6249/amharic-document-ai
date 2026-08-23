@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -62,8 +62,29 @@ class Settings(BaseSettings):
     llm_max_tokens_per_request: int = 2_000
     user_daily_job_quota: int = 50
 
+    # --- deferred: payments (threat T-25). Wired, disabled, no route mounted. ---
+    payments_enabled: bool = False
+    payment_webhook_secret: SecretStr | None = None
+
     # --- pipeline ---
     pipeline_mode: Literal["stub", "full"] = "stub"
+
+    @model_validator(mode="after")
+    def _auth_role_required_outside_dev(self) -> Settings:
+        """Refuse to start without a dedicated auth connection outside development.
+
+        Row Level Security is always on (control C-17), and login has to read `users`
+        before any identity exists. If auth_database_url falls back to the RLS-scoped
+        application role, every login silently fails with "invalid credentials" -- an
+        outage that looks exactly like a password problem. Fail at startup instead.
+        """
+        if self.environment in {"staging", "prod"} and not self.auth_database_url:
+            raise ValueError(
+                "ADAI_AUTH_DATABASE_URL must be set outside dev: login reads `users` "
+                "before authentication and the RLS-scoped app role cannot see the row. "
+                "Point it at the adai_auth role (see scripts/db_roles.sql)."
+            )
+        return self
 
     @field_validator("cors_allow_origins", "allowed_upload_types", mode="before")
     @classmethod

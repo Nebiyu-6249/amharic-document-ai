@@ -36,7 +36,9 @@ dependencies = [
     "rapidfuzz>=3.14,<4",
     "unicodedata2>=17,<18",
     # AEAD for encrypting sensitive columns at rest (control C-37).
-    "cryptography>=44,<48",
+    # Floor is 50.0.0: PYSEC-2026-3552 and earlier advisories. Caught by
+    # pip-audit in `make security` (control C-39), which is what that gate is for.
+    "cryptography>=50,<51",
 ]
 
 [project.optional-dependencies]

@@ -22,7 +22,10 @@ def _jpeg() -> bytes:
 
 async def _authed(client: AsyncClient, email: str) -> None:
     await client.post("/auth/register", json={"email": email, "password": "correct-horse-battery"})
-    await client.post("/auth/login", json={"email": email, "password": "correct-horse-battery"})
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": "correct-horse-battery"}
+    )
+    client.headers["x-csrf-token"] = login.json()["csrf_token"]
 
 
 async def _run_pipeline_for(document_id: str) -> None:
@@ -131,3 +134,42 @@ async def test_retention_deadline_is_set_on_every_upload(client: AsyncClient) ->
     uploaded = dt.datetime.fromisoformat(body["uploaded_at"])
     expires = dt.datetime.fromisoformat(body["originals_expire_at"])
     assert 89 <= (expires - uploaded).days <= 90
+
+
+async def test_transcription_is_redacted_and_encrypted_at_rest(client: AsyncClient) -> None:
+    """Controls C-41 and C-37 on the real write path, not just as modules.
+
+    A control that exists but is never called protects nothing, so this asserts the
+    worker actually applies both.
+    """
+    from adai.config import get_settings
+    from adai.db import get_worker_sessionmaker
+    from adai.models import Transcription
+    from adai.security.crypto import decrypt_field, derive_key, is_encrypted
+
+    await _authed(client, "crypto@example.com")
+    created = await client.post("/documents", files={"file": ("a.jpg", _jpeg(), "image/jpeg")})
+    document_id = created.json()["id"]
+    await _run_pipeline_for(document_id)
+
+    from sqlalchemy import select
+
+    async with get_worker_sessionmaker()() as session:
+        row = (
+            await session.execute(
+                select(Transcription).where(Transcription.document_id == uuid.UUID(document_id))
+            )
+        ).scalar_one()
+
+    assert row.encrypted_text is not None, "C-37: transcription was not encrypted at rest"
+    assert is_encrypted(row.encrypted_text)
+    # The decisive assertion: no plaintext copy sits beside the ciphertext, or the
+    # encryption would be decorative.
+    assert row.markdown == "", "plaintext transcription stored alongside the ciphertext"
+    assert "regions" not in row.structured, "region text leaked into the plaintext column"
+
+    import json
+
+    key = derive_key(get_settings().secret_key.get_secret_value())
+    payload = json.loads(decrypt_field(row.encrypted_text, key))
+    assert "markdown" in payload and "regions" in payload
