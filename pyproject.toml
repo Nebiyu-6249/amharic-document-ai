@@ -104,7 +104,7 @@ mypy_path = "src"
 packages = ["adai"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "argon2.*", "unicodedata2.*"]
+module = ["arq.*", "argon2.*", "unicodedata2.*", "surya.*", "openai.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -1,6 +1,7 @@
 # Project Status
 
-**Date:** 2026-08-23 · **Phase reached:** end of Phase 5 (security implementation). Phase 6 (evaluation) is not started.
+**Date:** 2026-08-23 · **Phase reached:** all phases complete (0–6). The remaining work is blocked on dataset
+access, not on engineering — see §6.
 
 Everything below was verified by running it in the session that produced this repo,
 except where explicitly marked **UNVERIFIED**.
@@ -27,7 +28,7 @@ except where explicitly marked **UNVERIFIED**.
 | **Docker image** | API image **built and run**; served `/healthz` and `/readyz` from inside the container against host Postgres. |
 | **C-45 in the image** | `torch`, `paddle`, `surya`, `kraken`, `onnxruntime`, `cv2` all absent from the built image; `pillow 12.3.0` present. |
 | **Frontend** | `npm install`, `tsc --noEmit` and `next build` all clean; standalone output. |
-| **Quality gates** | ruff clean, ruff-format clean, **mypy strict clean on 49 files**, **208 tests passing**, `pip-audit` clean, secret scan clean, `docker compose config` valid. |
+| **Quality gates** | ruff clean, ruff-format clean, **mypy strict clean on 57 files**, **246 tests passing**, `pip-audit` clean, secret scan clean, `docker compose config` valid. |
 
 ### Implemented pipeline stages
 
@@ -59,6 +60,49 @@ references and per-control tests in [SECURITY.md](SECURITY.md).
 | **Mutation testing** | 16 controls removed or inverted in turn; every one caught by its test. Table in SECURITY.md §1. |
 | **Dependency audit (C-39)** | Two tiers. `api` and `dev` are strict and clean. The `ml` extra carries two advisories that `kraken 7.1` pins in place (`click<8.3`, `lightning==2.6.1`, the latter with **no published fix**) — proven unfixable by resolver error, listed by id so new findings still fail the build. |
 
+
+### Evaluation harness (Phase 6)
+
+| Component | State |
+|---|---|
+| **Metric set** | CER, normalisation-aware CER, WER, NED, layout mAP by class, reading-order Kendall's tau, field-level F1 — all implemented and unit-tested. |
+| **Harness** | `evaluate()` runs any system implementing `transcribe()`, so our pipeline and an off-the-shelf VLM go through identical code on identical samples. Reports **per corpus**, never pooled. |
+| **Three splits** | `build_splits()` produces IID, unseen-writer and unseen-capture. Writers are held out **whole** — a test asserts no writer appears on both sides. Splits are deterministic (SHA-256 buckets, not salted `hash()`). |
+| **CLI** | `adai-eval`, with meaningful exit codes: 0 a real result, 1 a stubbed run, 2 a refusal. |
+| **Baselines** | `pipeline`, `surya` (quarantined container only), `openai-vlm` (consent-gated). |
+
+Four refusals are built in, each preventing a specific way of reporting a number that is
+wrong in a flattering direction:
+
+- an **empty corpus** is refused, because zero samples score 0.0 on everything, which
+  reads as a perfect system;
+- an **empty split** is refused for the same reason, and `Splits.gaps` names it;
+- a **stubbed run** is flagged in the report, in `notes`, and by exit code 1;
+- a **failed sample** is scored as total error rather than skipped, because skipping
+  failures quietly improves the mean.
+
+The **unseen-capture split is empty and will stay empty** until data is collected: Fidel
+and HHD-Ethiopic are both pre-cropped line images, so neither contains warped, shadowed
+or ruled-paper page captures. `build_splits` returns an empty split rather than
+substituting IID data — a visible gap beats a false result.
+
+### Project skills (Phase 4)
+
+Three skills under `.claude/skills/`, so a future session inherits these conventions
+without being told:
+
+| Skill | Covers |
+|---|---|
+| `ethiopic-script` | 523-codepoint inventory, four homophone families, `[\s፡]+` tokenisation, Ge'ez numerals, astral-plane warning |
+| `ocr-eval` | Mandatory metrics, the three splits, the reporting rules, baseline constraints |
+| `security-review` | Per-surface checklists, the mutation-testing standard, how to add a control |
+
+Both reference files are **generated** — from the Unicode database and from
+`docs/SECURITY.md` respectively — so they cannot drift. `make skills` regenerates them
+and a test fails if either is stale. 19 tests check frontmatter, trigger-phrase
+presence, the progressive-disclosure line budget, that every referenced file exists, and
+that the quoted figures still match the code.
+
 ---
 
 ## 2. What is stubbed
@@ -74,7 +118,8 @@ assembly, into the database (`contains_stub_stages`), and out through the API re
 | **Stage 3 line segmentation** | Needs kraken from the ml extra. **Deliberately does not fall back to projection profiles** — ADR-0004 rejects them for ruled paper | Install ml extra, fine-tune `blla` |
 | **Stage 4 recognition** | No checkpoint; both tracks need Fidel. Returns **empty text, not plausible Amharic** | Dataset access, then train |
 | **`data/fidel.py`** | Schema never observed; raises `FidelNotAvailableError` with an actionable message | Unblock Hugging Face, or supply files out of band |
-| **`make train` / `make eval`** | Exit 1 with an explanation rather than pretending | Same as above |
+| **`make train`** | Exits 1 with an explanation rather than pretending | Same as above |
+| **`make eval`** | Runs, then exits 2 because no corpus exists. The harness itself is real and tested | Same as above |
 
 ---
 
@@ -169,7 +214,9 @@ Phase 5 added nine more, all found by running things:
     content, asserted by a test.
 17. **`cryptography` had to be bumped 47 → 50** through three chained advisories; the
     original `<48` upper bound would have blocked the fix. Caught by C-39.
-18. **A missing `ADAI_AUTH_DATABASE_URL` makes every login fail** with "invalid
+18. **`pyproject.toml` declared the `adai-eval` console script before the module
+    existed.** Nothing caught it for two phases; a test now imports it.
+19. **A missing `ADAI_AUTH_DATABASE_URL` makes every login fail** with "invalid
     credentials", which looks like a password problem. Now a startup error outside dev.
 
 Each security control was also **mutation-tested**: 16 controls — redaction, EXIF stripping, SVG rejection,

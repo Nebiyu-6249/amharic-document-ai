@@ -74,9 +74,15 @@ train: ## Train a recogniser -- BLOCKED, see docs/STATUS.md
 	@echo "src/adai/data/fidel.py. Resolve dataset access first."
 	@exit 1
 
-eval: ## Run the evaluation harness -- needs a dataset, see docs/STATUS.md
-	@echo "eval: no dataset available. See ADR-0008 and docs/STATUS.md."
-	@exit 1
+eval: ## Run the evaluation harness (exits 2 without a corpus, 1 on a stubbed run)
+	$(PY) -m adai.eval.cli --system pipeline --split iid
+
+eval-baseline: ## Run the off-the-shelf VLM baseline (ADR-0010 decision gate)
+	$(PY) -m adai.eval.cli --system surya --split unseen_capture
+
+skills: ## Regenerate the generated reference files inside .claude/skills
+	$(PY) .claude/skills/ethiopic-script/scripts/regenerate_inventory.py
+	$(PY) .claude/skills/security-review/scripts/regenerate_checklists.py
 
 clean: ## Remove caches and build artefacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache dist build sbom.json
